@@ -41,42 +41,49 @@ except ImportError:
 
 SCHEDULER_API = 2.2
 
-#Exceptions
+# Exceptions
+
+
 class GenericError(Exception):
     """Base class for custom exceptions"""
     faultCode = 1000
     fromFault = False
+
     def __str__(self):
         try:
             return str(self.args[0]['args'][0])
-        except:
+        except BaseException:
             try:
                 return str(self.args[0])
-            except:
+            except BaseException:
                 return str(self.__dict__)
+
 
 class AuthError(GenericError):
     """Raised when there is an error in authentication"""
     faultCode = 1002
 
+
 class RetryError(AuthError):
     """Raised when a request is received twice and cannot be rerun"""
     faultCode = 1009
+
 
 def ensure_connection(session):
     """ This function ensures connection to the scheduler's xmlrpc server and
     does sanity check to ensure that server and client have the same API """
     try:
         ret = session.rhts.getAPIVersion()
-    except:
+    except BaseException:
         print("Error: Unable to connect to server %s" % session.hostname)
         sys.exit(1)
     if ret != SCHEDULER_API:
         print("FAIL: The server is at API version %s and the client is at %s"
-                 % (ret, SCHEDULER_API))
+              % (ret, SCHEDULER_API))
         sys.exit(1)
 
-def encode_args(*args,**opts):
+
+def encode_args(*args, **opts):
     """The function encodes optional arguments as regular arguments.
 
     This is used to allow optional arguments in xmlrpc calls
@@ -87,10 +94,12 @@ def encode_args(*args,**opts):
         args = args + (opts,)
     return args
 
-#A function to get create an exception from a fault
+# A function to get create an exception from a fault
+
+
 def convertFault(fault):
     """Convert a fault to the corresponding Exception type, if possible"""
-    code = getattr(fault,'faultCode',None)
+    code = getattr(fault, 'faultCode', None)
     if code is None:
         return fault
     for v in globals().values():
@@ -99,16 +108,18 @@ def convertFault(fault):
             ret = v(fault.faultString)
             ret.fromFault = True
             return ret
-    #otherwise...
+    # otherwise...
     return fault
+
 
 def callMethod(session, name, *args, **opts):
     """compatibility wrapper for _callMethod"""
     return _callMethod(session, name, args, opts)
 
+
 def _callMethod(session, name, args, kwargs):
-    #pass named opts in a way the server can understand
-    args = encode_args(*args,**kwargs)
+    # pass named opts in a way the server can understand
+    args = encode_args(*args, **kwargs)
 
     tries = 0
     debug = False
@@ -117,7 +128,7 @@ def _callMethod(session, name, args, kwargs):
     while tries <= max_retries:
         tries += 1
         try:
-            result =  session.__getattr__(name)(*args)
+            result = session.__getattr__(name)(*args)
             if result == 0:
                 return True
             else:
@@ -125,30 +136,38 @@ def _callMethod(session, name, args, kwargs):
                 return False
         except Fault as fault:
             raise convertFault(fault)
-        except (socket.error,socket.sslerror,xmlrpclib.ProtocolError,ssl_error) as e:
+        except (socket.error, socket.sslerror, xmlrpclib.ProtocolError, ssl_error) as e:
             if debug:
                 print("Try #%d for call (%s) failed: %s" % (tries, name, e))
         time.sleep(interval)
-    raise RetryError("reached maximum number of retries, last call failed with: %s" 
-                                % ''.join(traceback.format_exception_only(*sys.exc_info()[:2])))
+    raise RetryError("reached maximum number of retries, last call failed with: %s"
+                     % ''.join(traceback.format_exception_only(*sys.exc_info()[:2])))
 
-def uploadWrapper(session, localfile, recipetestid, name=None, callback=None, blocksize=262144, start=0):
+
+def uploadWrapper(
+        session,
+        localfile,
+        recipetestid,
+        name=None,
+        callback=None,
+        blocksize=262144,
+        start=0):
     """upload a file in chunks using the uploadFile call"""
     # XXX - stick in a config or something
     debug = 1
-    started=time.time()
-    retries=3
+    started = time.time()
+    retries = 3
     if name is None:
         name = os.path.basename(localfile)
 
     tmpfile = None
     try:
         if localfile.startswith("/sys/") or localfile.startswith("/proc/"):
-            tmpfile = tempfile.mktemp() # No tempfile.mkstemp() in 2.2 (RHEL3)
+            tmpfile = tempfile.mktemp()  # No tempfile.mkstemp() in 2.2 (RHEL3)
             shutil.copy(localfile, tmpfile)
             localfile = tmpfile
 
-        fo = open(localfile, "rb")  #specify bufsize?
+        fo = open(localfile, "rb")  # specify bufsize?
         totalsize = os.path.getsize(localfile)
         ofs = start
         if ofs != 0:
@@ -175,8 +194,18 @@ def uploadWrapper(session, localfile, recipetestid, name=None, callback=None, bl
             tries = 0
             while True:
                 if debug:
-                    print("uploadFile(%r,%r,%r,%r,%r,...)" % (recipetestid, name, sz, digest, offset))
-                if callMethod(session, 'results.uploadFile', recipetestid, name, sz, digest, offset, data):
+                    print(
+                        "uploadFile(%r,%r,%r,%r,%r,...)" %
+                        (recipetestid, name, sz, digest, offset))
+                if callMethod(
+                    session,
+                    'results.uploadFile',
+                    recipetestid,
+                    name,
+                    sz,
+                    digest,
+                    offset,
+                        data):
                     break
                 if tries <= retries:
                     tries += 1
@@ -194,9 +223,13 @@ def uploadWrapper(session, localfile, recipetestid, name=None, callback=None, bl
             if t2 <= 0:
                 t2 = 1
             if debug:
-                print("Uploaded %d bytes in %f seconds (%f kbytes/sec)" % (size, t1, size//t1//1024))
+                print(
+                    "Uploaded %d bytes in %f seconds (%f kbytes/sec)" %
+                    (size, t1, size // t1 // 1024))
             if debug:
-                print("Total: %d bytes in %f seconds (%f kbytes/sec)" % (ofs, t2, ofs//t2//1024))
+                print(
+                    "Total: %d bytes in %f seconds (%f kbytes/sec)" %
+                    (ofs, t2, ofs // t2 // 1024))
             if callback:
                 callback(ofs, totalsize, size, t1, t2)
         fo.close()
